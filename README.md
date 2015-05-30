@@ -10,3 +10,14 @@ You need Apache2 and Nginx both installed.
   
 ## Usage ##
 	# anvh [create | delete] [domain]
+
+## Example ##
+create:
+
+	# anvh create test.com
+	# anvh create dev.test.com
+	
+delete:
+
+	# anvh delete test.com
+	# anvh delete dev.test.com
