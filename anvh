@@ -1,0 +1,232 @@
+#!/bin/bash
+### Set default parameters
+action=$1
+domain=$2
+owner=$(who am i | awk '{print $1}')
+email='admin@oddcode.ru'
+a2sitesEnable='/etc/apache2/sites-enabled/'
+a2sitesAvailable='/etc/apache2/sites-available/'
+ngsitesEnable='/etc/nginx/sites-enabled/'
+ngsitesAvailable='/etc/nginx/sites-available/'
+hostsDir='/home/hosts/'
+webDir='www'
+logDir='logs'
+a2sitesAvailabledomain=$a2sitesAvailable$domain
+
+### Set status
+bold="\e[1m"
+red="\e[31m"
+green="\e[32m"
+yellow="\e[33m"
+normal="\e[m\017"
+st_ok="[$green ok $normal]"
+st_error="[$red error $normal]"
+st_warn="[$yellow warn $normal]"
+
+### don't modify from here unless you know what you are doing ####
+if [ "$(whoami)" != 'root' ]; then
+	echo -e $"${st_error} You have no permission to run $0 as non-root user. Use sudo"
+	exit 1;
+fi
+
+if [ "$action" != 'create' ] && [ "$action" != 'delete' ]; then
+	echo -e $"${st_error} You need to prompt for action (${bold}create${normal} or ${bold}delete${normal}) -- Lower-case only"
+	exit 1;
+fi
+
+while [ "$domain" == "" ]
+do
+	echo -e $"${st_warn} Please provide domain. For example: test.com"
+	read domain
+done
+
+if [ "$action" == 'create' ]; then
+	### check if domain already exists
+	if [ -e $a2sitesAvailabledomain ]; then
+		echo -e $"${st_error} This domain already exists. Please Try Another one"
+		exit;
+	fi
+
+	### check if directory exists or not
+	if ! [ -d $hostsDir$domain ]; then
+		### create the host directory
+		mkdir $hostsDir$domain
+		
+		### create the www directory 
+		mkdir $hostsDir$domain/$webDir
+		### create the logs directory host directory
+		mkdir $hostsDir$domain/$logDir
+		
+		### give permission to root dir
+		chmod 755 $hostsDir$domain
+		
+		### write test file in the new domain dir
+		if ! echo "<?php echo phpinfo(); ?>" > $hostsDir$domain/$webDir/phpinfo.php
+		then
+			echo -e $"${st_error} Not able to write in file $hostsDir$domain/$webDir/phpinfo.php. Please check permissions"
+			exit;
+		else
+			echo -e $"${st_ok} Added content to $hostsDir$domain/$webDir/phpinfo.php"
+		fi
+	fi
+
+	### Apache2 configuration file creating
+	if ! echo "<VirtualHost *:81>
+	ServerAdmin $email
+	ServerName $domain
+	ServerAlias $domain
+
+	DocumentRoot $hostsDir$domain/$webDir
+	<Directory />
+		Options FollowSymLinks
+		AllowOverride None
+		#AllowOverride All
+	</Directory>
+			
+	<Directory $hostsDir$domain/$webDir/>
+		Options Indexes FollowSymLinks MultiViews
+		AllowOverride all
+		Order allow,deny
+		allow from all
+	</Directory>
+			
+	# ScriptAlias /cgi-bin/ /usr/lib/cgi-bin/
+	# <Directory /usr/lib/cgi-bin>
+	# 	AllowOverride None
+	# 	Options +ExecCGI -MultiViews +SymLinksIfOwnerMatch
+	#	Order allow,deny
+	#	Allow from all
+	# </Directory>
+	
+	ErrorLog $hostsDir$domain/$logDir/apache-error.log
+	# Possible values include: debug, info, notice, warn, error, crit, alert, emerg.
+	LogLevel warn
+			
+	CustomLog $hostsDir$domain/$logDir/apache-access.log combined
+</VirtualHost>" > $a2sitesAvailabledomain
+	then
+		echo -e $"${st_error} Apache2 configuration file $domain is not created"
+		exit;
+	else
+		echo -e $"${st_ok} Apache2 configuration file $domain is created"
+	fi
+	
+	### Nginx configuration file creating
+	if ! echo "server {
+	listen   80;
+	server_name $domain;
+
+    access_log $hostsDir$domain/$logDir/nginx.access.log;
+    error_log $hostsDir$domain/$logDir/nginx.error.log;
+	
+	location ~* .(jpg|jpeg|gif|png|ico|css|zip|tgz|gz|rar|bz2|doc|xls|exe|pdf|ppt|txt|tar|mid|midi|wav|bmp|rtf|js|swf|flv|html|htm|mp3|docx|xlsx)\$ {
+		root $hostsDir$domain/$webDir/;
+		error_page 404 = @fallback;
+		index index.html index.php;
+		access_log off;
+		expires 30d;
+	}
+	
+	location ~ /.ht { 
+		deny all; 
+	}
+	
+	location / {
+		proxy_pass http://127.0.0.1:81/;
+		proxy_set_header X-Real-IP \$remote_addr;
+		proxy_set_header X-Forwarded-for \$remote_addr;
+		proxy_set_header Host \$host;
+		proxy_connect_timeout 60;
+		proxy_send_timeout 90;
+		proxy_read_timeout 90;
+		proxy_redirect off;
+		proxy_set_header Connection close;
+		proxy_pass_header Content-Type;
+		proxy_pass_header Content-Disposition;
+		proxy_pass_header Content-Length;
+	}
+	
+	location @fallback {
+	  proxy_pass http://127.0.0.1:81;
+	  proxy_set_header Host \$host;
+	  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+	  proxy_set_header X-Forwarded-Proto \$scheme;
+	  proxy_set_header X-Real-IP \$remote_addr;
+	}
+	
+}" > $ngsitesAvailable$domain
+	then
+		echo -e $"${st_error} Nginx configuration file $domain is not created"
+		exit;
+	else
+		echo -e $"${st_ok} Nginx configuration file $domain is created"
+	fi
+
+	### Add domain in /etc/hosts
+	if ! echo "127.0.0.1	$domain" >> /etc/hosts
+	then
+		echo -e $"${st_error} Not able to write in /etc/hosts"
+		exit;
+	else
+		echo -e $"${st_ok} Host added to /etc/hosts file"
+	fi
+
+	if [ "$owner" == "" ]; then
+		chown -R $(whoami):$(whoami) $hostsDir$domain
+	else
+		chown -R $owner:$owner $hostsDir$domain
+	fi
+
+	### Apache2 enable website
+	a2ensite $domain
+	service apache2 reload
+	
+	### Nginx enable website
+	ln -s $ngsitesAvailable$domain $ngsitesEnable$domain
+	service nginx restart
+
+	### show the finished message
+	echo -e $"${st_ok} Complete! \nYou now have a new Virtual Host \nYour new host is: http://$domain \nAnd its located at $hostsDir$domain"
+	exit;
+else
+	### check whether domain already exists
+	if ! [ -e $a2sitesAvailabledomain ]; then
+		echo -e $"${st_error} This domain does not exist.\nPlease try another one"
+		exit;
+	else
+		### Delete domain in /etc/hosts
+		sed -i "/$domain/d" /etc/hosts
+
+		### Apache2 disable website
+		a2dissite $domain
+		service apache2 reload
+		
+		### Nginx disable website
+		rm $ngsitesEnable$domain
+		service nginx restart
+
+		### Delete virtual host rules files
+		rm $a2sitesAvailable$domain
+		rm $ngsitesAvailable$domain
+	fi
+
+	### check if directory exists or not
+	if [ -d $hostsDir$domain ]; then
+		echo -e $"Delete host root directory ? (y/n)"
+		read deldir
+
+		if [ "$deldir" == 'y' -o "$deldir" == 'Y' ]; then
+			### Delete the directory
+			rm -rf $hostsDir$domain
+			echo -e $"${st_ok} Directory deleted"
+		else
+			echo -e $"${st_ok} Host directory conserved"
+		fi
+	else
+		echo -e $"${st_error} Host directory not found. Ignored"
+	fi
+
+	### show the finished message
+	echo -e $"${st_ok} Complete!\nYou just removed Virtual Host $domain"
+	exit 0;
+fi
